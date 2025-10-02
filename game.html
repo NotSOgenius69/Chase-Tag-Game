@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chase Tag Game</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: Arial, sans-serif;
+        background: #1a1a2e;
+        color: white;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      h1 {
+        color: #0ff;
+        text-shadow: 0 0 10px #0ff;
+        margin-bottom: 20px;
+      }
+
+      .game-info {
+        display: flex;
+        gap: 30px;
+        margin-bottom: 20px;
+        font-size: 18px;
+      }
+
+      .score {
+        background: #16213e;
+        padding: 10px 20px;
+        border-radius: 10px;
+        border: 2px solid #0ff;
+      }
+
+      .timer {
+        background: #16213e;
+        padding: 10px 20px;
+        border-radius: 10px;
+        border: 2px solid #ff6b35;
+        font-weight: bold;
+      }
+
+      canvas {
+        border: 3px solid #0ff;
+        border-radius: 10px;
+        background: #0a0a15;
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+      }
+
+      .controls {
+        margin-top: 20px;
+        display: flex;
+        gap: 15px;
+      }
+
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        background: #0ff;
+        color: #1a1a2e;
+        font-weight: bold;
+        transition: all 0.3s;
+      }
+
+      button:hover {
+        background: #00cccc;
+        transform: translateY(-2px);
+      }
+
+      button:disabled {
+        background: #444 !important;
+        color: #aaa !important;
+        cursor: not-allowed !important;
+        opacity: 0.6;
+        box-shadow: none;
+        transform: none;
+      }
+
+      .legend {
+        margin-top: 20px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 15px;
+        font-size: 14px;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .legend-color {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+      }
+
+      .status {
+        margin-top: 15px;
+        font-size: 16px;
+        font-weight: bold;
+        color: #ff6b35;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🤖 AI Chase Tag Game</h1>
+
+    <div class="game-info">
+      <div class="score">
+        <div>Red Player: <span id="redScore">0</span></div>
+        <div>Green Player: <span id="greenScore">0</span></div>
+      </div>
+      <div class="timer">Time: <span id="timer">20</span>s</div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <div class="controls">
+      <button onclick="startGame()">Start Game</button>
+      <button id="pauseBtn" onclick="pauseGame()">Pause</button>
+      <button onclick="resetGame()">Reset</button>
+    </div>
+
+    <div class="status" id="gameStatus">Click Start Game to begin!</div>
+
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-color" style="background: #ff4757"></div>
+        <span>Red Player (A)</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-color" style="background: #2ed573"></div>
+        <span>Green Player (B)</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-color" style="background: #5742f5"></div>
+        <span>Walls</span>
+      </div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+
+      // Game state
+      let gameRunning = false;
+      let gameTime = 20;
+      let redScore = 0;
+      let greenScore = 0;
+      let currentChaser = "A"; // A or B
+      let roundTimer = null;
+
+      // Game objects
+      let playerA = { x: 50, y: 50, size: 15, speed: 2 };
+      let playerB = { x: 750, y: 550, size: 15, speed: 2 };
+      let obstacles = [];
+
+      // Initialize obstacles (walls)
+      function initObstacles() {
+        obstacles = [
+          // Border walls
+          { x: 0, y: 0, width: 800, height: 10 },
+          { x: 0, y: 590, width: 800, height: 10 },
+          { x: 0, y: 0, width: 10, height: 600 },
+          { x: 790, y: 0, width: 10, height: 600 },
+
+          // Internal obstacles
+          { x: 200, y: 150, width: 100, height: 20 },
+          { x: 500, y: 250, width: 20, height: 150 },
+          { x: 300, y: 400, width: 150, height: 20 },
+          { x: 100, y: 300, width: 20, height: 100 },
+          { x: 600, y: 100, width: 80, height: 20 },
+          { x: 400, y: 50, width: 20, height: 80 },
+          { x: 150, y: 500, width: 100, height: 20 },
+          { x: 650, y: 350, width: 20, height: 120 },
+        ];
+      }
+
+      // A* pathfinding implementation
+      class AStar {
+        constructor(obstacles) {
+          this.obstacles = obstacles;
+          this.gridSize = 20;
+        }
+
+        isValidPosition(x, y) {
+          if (x < 10 || y < 10 || x >= 790 || y >= 590) return false;
+
+          for (let obstacle of this.obstacles) {
+            if (
+              x >= obstacle.x &&
+              x <= obstacle.x + obstacle.width &&
+              y >= obstacle.y &&
+              y <= obstacle.y + obstacle.height
+            ) {
+              return false;
+            }
+          }
+          return true;
+        }
+
+        getNeighbors(node) {
+          const neighbors = [];
+          const directions = [
+            { x: -this.gridSize, y: 0 },
+            { x: this.gridSize, y: 0 },
+            { x: 0, y: -this.gridSize },
+            { x: 0, y: this.gridSize },
+            { x: -this.gridSize, y: -this.gridSize },
+            { x: this.gridSize, y: -this.gridSize },
+            { x: -this.gridSize, y: this.gridSize },
+            { x: this.gridSize, y: this.gridSize },
+          ];
+
+          for (let dir of directions) {
+            const newX = node.x + dir.x;
+            const newY = node.y + dir.y;
+
+            if (this.isValidPosition(newX, newY)) {
+              neighbors.push({ x: newX, y: newY });
+            }
+          }
+
+          return neighbors;
+        }
+
+        heuristic(a, b) {
+          return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+        }
+
+        findPath(start, goal) {
+          const openSet = [
+            {
+              x: Math.round(start.x / this.gridSize) * this.gridSize,
+              y: Math.round(start.y / this.gridSize) * this.gridSize,
+              g: 0,
+              h: 0,
+              f: 0,
+              parent: null,
+            },
+          ];
+          const closedSet = [];
+          const goalNode = {
+            x: Math.round(goal.x / this.gridSize) * this.gridSize,
+            y: Math.round(goal.y / this.gridSize) * this.gridSize,
+          };
+
+          while (openSet.length > 0) {
+            openSet.sort((a, b) => a.f - b.f);
+            const current = openSet.shift();
+
+            if (current.x === goalNode.x && current.y === goalNode.y) {
+              const path = [];
+              let node = current;
+              while (node.parent) {
+                path.unshift({ x: node.x, y: node.y });
+                node = node.parent;
+              }
+              return path;
+            }
+
+            closedSet.push(current);
+
+            for (let neighbor of this.getNeighbors(current)) {
+              if (
+                closedSet.some(
+                  (node) => node.x === neighbor.x && node.y === neighbor.y
+                )
+              ) {
+                continue;
+              }
+
+              const g = current.g + this.heuristic(current, neighbor);
+              const h = this.heuristic(neighbor, goalNode);
+              const f = g + h;
+
+              const existingNode = openSet.find(
+                (node) => node.x === neighbor.x && node.y === neighbor.y
+              );
+              if (!existingNode || g < existingNode.g) {
+                const newNode = { ...neighbor, g, h, f, parent: current };
+                if (!existingNode) {
+                  openSet.push(newNode);
+                } else {
+                  Object.assign(existingNode, newNode);
+                }
+              }
+            }
+          }
+
+          return [];
+        }
+      }
+
+      // AI Movement functions
+      function moveChaser(chaser, evader) {
+        const astar = new AStar(obstacles);
+        const path = astar.findPath(chaser, evader);
+        if (path.length > 0) {
+          const nextPos = path[0];
+          const dx = nextPos.x - chaser.x;
+          const dy = nextPos.y - chaser.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          if (distance > 0) {
+            chaser.x += (dx / distance) * chaser.speed;
+            chaser.y += (dy / distance) * chaser.speed;
+          }
+        }
+      }
+
+      function moveEvader(evader, chaser) {
+        const astar = new AStar(obstacles);
+        const gridSize = astar.gridSize;
+        const dangerRadius = 600; // You can adjust this value
+        let bestScore = -Infinity;
+        let bestTarget = null;
+
+        const currentDist = Math.sqrt(
+          (evader.x - chaser.x) ** 2 + (evader.y - chaser.y) ** 2
+        );
+
+        // If chaser is outside danger radius, evader stays still
+        if (currentDist > dangerRadius) {
+          return;
+        }
+
+        // Try to move to a position farther from the chaser
+        for (let x = 20; x < 780; x += gridSize) {
+          for (let y = 20; y < 580; y += gridSize) {
+            if (!astar.isValidPosition(x, y)) continue;
+
+            const dist = Math.sqrt((x - chaser.x) ** 2 + (y - chaser.y) ** 2);
+
+            // Only consider positions farther from the chaser than current position
+            if (dist <= currentDist) continue;
+
+            // Avoid boundaries
+            const boundaryPenalty =
+              x < 40 || x > 760 || y < 40 || y > 560 ? -100 : 0;
+
+            // Count escape routes
+            let escapeRoutes = 0;
+            for (let dir of [
+              { x: -gridSize, y: 0 },
+              { x: gridSize, y: 0 },
+              { x: 0, y: -gridSize },
+              { x: 0, y: gridSize },
+            ]) {
+              const nx = x + dir.x;
+              const ny = y + dir.y;
+              if (astar.isValidPosition(nx, ny)) escapeRoutes++;
+            }
+
+            const score = dist + escapeRoutes * 50 + boundaryPenalty;
+            if (score > bestScore) {
+              bestScore = score;
+              bestTarget = { x, y };
+            }
+          }
+        }
+
+        // If no position is farther, pick the one with most escape routes and away from boundaries
+        if (!bestTarget) {
+          for (let x = 20; x < 780; x += gridSize) {
+            for (let y = 20; y < 580; y += gridSize) {
+              if (!astar.isValidPosition(x, y)) continue;
+
+              // Avoid boundaries
+              const boundaryPenalty =
+                x < 40 || x > 760 || y < 40 || y > 560 ? -100 : 0;
+
+              // Count escape routes
+              let escapeRoutes = 0;
+              for (let dir of [
+                { x: -gridSize, y: 0 },
+                { x: gridSize, y: 0 },
+                { x: 0, y: -gridSize },
+                { x: 0, y: gridSize },
+              ]) {
+                const nx = x + dir.x;
+                const ny = y + dir.y;
+                if (astar.isValidPosition(nx, ny)) escapeRoutes++;
+              }
+
+              const score = escapeRoutes * 50 + boundaryPenalty;
+              if (score > bestScore) {
+                bestScore = score;
+                bestTarget = { x, y };
+              }
+            }
+          }
+        }
+
+        // Move toward best target using A*
+        if (bestTarget) {
+          const path = astar.findPath(evader, bestTarget);
+          if (path.length > 0) {
+            const nextPos = path[0];
+            const dx = nextPos.x - evader.x;
+            const dy = nextPos.y - evader.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance > 0) {
+              evader.x += (dx / distance) * evader.speed;
+              evader.y += (dy / distance) * evader.speed;
+              return;
+            }
+          }
+        }
+
+        // Fallback: stay still if no escape is possible
+      }
+
+      function isValidPlayerPosition(x, y) {
+        if (x < 15 || y < 15 || x >= 785 || y >= 585) return false;
+
+        for (let obstacle of obstacles) {
+          if (
+            x >= obstacle.x - 15 &&
+            x <= obstacle.x + obstacle.width + 15 &&
+            y >= obstacle.y - 15 &&
+            y <= obstacle.y + obstacle.height + 15
+          ) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      // Collision detection
+      function checkCollision(p1, p2) {
+        const dx = p1.x - p2.x;
+        const dy = p1.y - p2.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < p1.size + p2.size;
+      }
+
+      // Game loop
+      function gameLoop() {
+        if (!gameRunning) return;
+
+        // Move players
+        if (currentChaser === "A") {
+          moveChaser(playerA, playerB);
+          moveEvader(playerB, playerA);
+        } else {
+          moveChaser(playerB, playerA);
+          moveEvader(playerA, playerB);
+        }
+
+        // Check for tag
+        if (checkCollision(playerA, playerB)) {
+          if (currentChaser === "A") {
+            redScore++;
+            updateStatus("Red Player tagged Green Player! Red Player scores!");
+          } else {
+            greenScore++;
+            updateStatus(
+              "Green Player tagged Red Player! Green Player scores!"
+            );
+          }
+          endRound();
+        }
+
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+
+      // Rendering
+      function render() {
+        // Clear canvas
+        ctx.fillStyle = "#0a0a15";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw obstacles
+        ctx.fillStyle = "#5742f5";
+        for (let obstacle of obstacles) {
+          ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+        }
+
+        // Player A (Red) with chaser indicator
+        ctx.fillStyle = "#ff4757";
+        ctx.beginPath();
+        ctx.arc(playerA.x, playerA.y, playerA.size, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (currentChaser === "A") {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(playerA.x, playerA.y, playerA.size + 5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Player B (Green) with chaser indicator
+        ctx.fillStyle = "#2ed573";
+        ctx.beginPath();
+        ctx.arc(playerB.x, playerB.y, playerB.size, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (currentChaser === "B") {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(playerB.x, playerB.y, playerB.size + 5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Update UI
+        document.getElementById("redScore").textContent = redScore;
+        document.getElementById("greenScore").textContent = greenScore;
+        document.getElementById("timer").textContent = gameTime;
+      }
+
+      // Game controls
+      function startGame() {
+        if (gameRunning) return;
+
+        // Clear any previous timer
+        if (roundTimer) {
+          clearInterval(roundTimer);
+          roundTimer = null;
+        }
+
+        gameRunning = true;
+        gameTime = 20;
+        updateStatus(
+          `Game started! ${
+            currentChaser === "A" ? "Red Player" : "Green Player"
+          } is chasing!`
+        );
+        document
+          .querySelector('button[onclick="startGame()"]')
+          ?.setAttribute("disabled", "true");
+
+        // Start timer
+        roundTimer = setInterval(() => {
+          gameTime--;
+          if (gameTime <= 0) {
+            clearInterval(roundTimer);
+            roundTimer = null;
+            // Determine evader and update score
+            let evaderColor =
+              currentChaser === "A" ? "Green Player" : "Red Player";
+            if (evaderColor === "Green Player") {
+              greenScore++;
+            } else {
+              redScore++;
+            }
+            updateStatus(`Time up! ${evaderColor} wins!`);
+            endRound();
+          }
+        }, 1000);
+
+        gameLoop();
+      }
+
+      function pauseGame() {
+        gameRunning = !gameRunning;
+        const pauseBtn = document.getElementById("pauseBtn");
+        if (gameRunning) {
+          pauseBtn.textContent = "Pause";
+          gameLoop();
+        } else {
+          pauseBtn.textContent = "Resume";
+        }
+      }
+
+      function resetGame() {
+        gameRunning = false;
+        gameTime = 20;
+        redScore = 0;
+        greenScore = 0;
+        currentChaser = "A";
+        playerA = { x: 50, y: 50, size: 15, speed: 2 };
+        playerB = { x: 750, y: 550, size: 15, speed: 2 };
+        document
+          .querySelector('button[onclick="startGame()"]')
+          ?.removeAttribute("disabled");
+        document.getElementById("pauseBtn").textContent = "Pause";
+        document
+          .querySelector('button[onclick="pauseGame()"]')
+          ?.removeAttribute("disabled");
+        updateStatus("Game reset. Click Start Game to begin!");
+        render();
+      }
+
+      function endRound() {
+        gameRunning = false;
+
+        // Clear timer if still running
+        if (roundTimer) {
+          clearInterval(roundTimer);
+          roundTimer = null;
+        }
+
+        // Switch roles only, colors stay the same
+        currentChaser = currentChaser === "A" ? "B" : "A";
+
+        // Reset positions
+        playerA.x = 50;
+        playerA.y = 50;
+        playerB.x = 750;
+        playerB.y = 550;
+        playerA.speed = 2;
+        playerB.speed = 2;
+
+        setTimeout(() => {
+          if (redScore < 5 && greenScore < 5) {
+            startGame();
+          } else {
+            document
+              .querySelector('button[onclick="pauseGame()"]')
+              ?.setAttribute("disabled", "true");
+            updateStatus(
+              `Game Over! Final Score - Red Player: ${redScore}, Green Player: ${greenScore}`
+            );
+          }
+        }, 3000);
+      }
+
+      function updateStatus(message) {
+        document.getElementById("gameStatus").textContent = message;
+      }
+
+      // Initialize game
+      initObstacles();
+      render();
+    </script>
+  </body>
+</html>
