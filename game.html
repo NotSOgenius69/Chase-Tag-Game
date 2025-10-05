@@ -161,8 +161,8 @@
       let roundTimer = null;
 
       // Game objects
-      let playerA = { x: 50, y: 50, size: 15, speed: 2 };
-      let playerB = { x: 750, y: 550, size: 15, speed: 2 };
+      let playerA = { x: 50, y: 50, size: 15 };
+      let playerB = { x: 750, y: 550, size: 15 };
       let obstacles = [];
 
       // Initialize obstacles (walls)
@@ -184,6 +184,132 @@
           { x: 150, y: 500, width: 100, height: 20 },
           { x: 650, y: 350, width: 20, height: 120 },
         ];
+      }
+
+      class EvaderAStar {
+        constructor(obstacles, chaser = null) {
+          this.obstacles = obstacles;
+          this.gridSize = 20;
+          this.chaser = chaser; // For danger cost
+        }
+
+        isValidPosition(x, y) {
+          if (x < 10 || y < 10 || x >= 790 || y >= 590) return false;
+          for (let obstacle of this.obstacles) {
+            if (
+              x >= obstacle.x &&
+              x <= obstacle.x + obstacle.width &&
+              y >= obstacle.y &&
+              y <= obstacle.y + obstacle.height
+            ) {
+              return false;
+            }
+          }
+          return true;
+        }
+
+        getNeighbors(node) {
+          const neighbors = [];
+          const directions = [
+            { x: -this.gridSize, y: 0 },
+            { x: this.gridSize, y: 0 },
+            { x: 0, y: -this.gridSize },
+            { x: 0, y: this.gridSize },
+            { x: -this.gridSize, y: -this.gridSize },
+            { x: this.gridSize, y: -this.gridSize },
+            { x: -this.gridSize, y: this.gridSize },
+            { x: this.gridSize, y: this.gridSize },
+          ];
+          for (let dir of directions) {
+            const newX = node.x + dir.x;
+            const newY = node.y + dir.y;
+            if (this.isValidPosition(newX, newY)) {
+              neighbors.push({ x: newX, y: newY });
+            }
+          }
+          return neighbors;
+        }
+
+        heuristic(a, b) {
+          // Standard Euclidean distance
+          return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+        }
+
+        danger(node) {
+          // Penalty if node is close to chaser
+          if (!this.chaser) return 0;
+          const dist = Math.sqrt(
+            Math.pow(node.x - this.chaser.x, 2) +
+              Math.pow(node.y - this.chaser.y, 2)
+          );
+          if (dist < 100) return 200; // High penalty if very close
+          if (dist < 180) return 80; // Medium penalty
+          return 0;
+        }
+
+        findPath(start, goal) {
+          const openSet = [
+            {
+              x: Math.round(start.x / this.gridSize) * this.gridSize,
+              y: Math.round(start.y / this.gridSize) * this.gridSize,
+              g: 0,
+              h: 0,
+              f: 0,
+              parent: null,
+            },
+          ];
+          const closedSet = [];
+          const goalNode = {
+            x: Math.round(goal.x / this.gridSize) * this.gridSize,
+            y: Math.round(goal.y / this.gridSize) * this.gridSize,
+          };
+
+          while (openSet.length > 0) {
+            openSet.sort((a, b) => a.f - b.f);
+            const current = openSet.shift();
+
+            if (current.x === goalNode.x && current.y === goalNode.y) {
+              const path = [];
+              let node = current;
+              while (node.parent) {
+                path.unshift({ x: node.x, y: node.y });
+                node = node.parent;
+              }
+              return path;
+            }
+
+            closedSet.push(current);
+
+            for (let neighbor of this.getNeighbors(current)) {
+              if (
+                closedSet.some(
+                  (node) => node.x === neighbor.x && node.y === neighbor.y
+                )
+              ) {
+                continue;
+              }
+
+              const g = current.g + this.heuristic(current, neighbor);
+              const h = this.heuristic(neighbor, goalNode);
+              const dangerCost = this.danger(neighbor);
+              const f = g + h + dangerCost;
+
+              const existingNode = openSet.find(
+                (node) => node.x === neighbor.x && node.y === neighbor.y
+              );
+              if (!existingNode || g < existingNode.g) {
+                const newNode = { ...neighbor, g, h, f, parent: current };
+                if (!existingNode) {
+                  openSet.push(newNode);
+                } else {
+                  Object.assign(existingNode, newNode);
+                }
+              }
+            }
+          }
+
+          return [];
+        }
       }
 
       // A* pathfinding implementation
@@ -302,122 +428,99 @@
         }
       }
 
+      function getChaser() {
+        return currentChaser === "A" ? playerA : playerB;
+      }
+
+      function getEvader() {
+        return currentChaser === "A" ? playerB : playerA;
+      }
+
       // AI Movement functions
       function moveChaser(chaser, evader) {
         const astar = new AStar(obstacles);
         const path = astar.findPath(chaser, evader);
+        const chaserSpeed = 3;
         if (path.length > 0) {
           const nextPos = path[0];
           const dx = nextPos.x - chaser.x;
           const dy = nextPos.y - chaser.y;
           const distance = Math.sqrt(dx * dx + dy * dy);
           if (distance > 0) {
-            chaser.x += (dx / distance) * chaser.speed;
-            chaser.y += (dy / distance) * chaser.speed;
+            chaser.x += (dx / distance) * chaserSpeed;
+            chaser.y += (dy / distance) * chaserSpeed;
           }
         }
       }
 
       function moveEvader(evader, chaser) {
-        const astar = new AStar(obstacles);
-        const gridSize = astar.gridSize;
-        const dangerRadius = 600; // You can adjust this value
-        let bestScore = -Infinity;
-        let bestTarget = null;
+        const gridSize = 20;
+        let farthest = { x: evader.x, y: evader.y };
+        let maxDist = -Infinity;
 
-        const currentDist = Math.sqrt(
-          (evader.x - chaser.x) ** 2 + (evader.y - chaser.y) ** 2
-        );
-
-        // If chaser is outside danger radius, evader stays still
-        if (currentDist > dangerRadius) {
-          return;
-        }
-
-        // Try to move to a position farther from the chaser
+        // Find the farthest valid point from the chaser
         for (let x = 20; x < 780; x += gridSize) {
           for (let y = 20; y < 580; y += gridSize) {
-            if (!astar.isValidPosition(x, y)) continue;
-
             const dist = Math.sqrt((x - chaser.x) ** 2 + (y - chaser.y) ** 2);
-
-            // Only consider positions farther from the chaser than current position
-            if (dist <= currentDist) continue;
-
-            // Avoid boundaries
-            const boundaryPenalty =
-              x < 40 || x > 760 || y < 40 || y > 560 ? -100 : 0;
-
-            // Count escape routes
-            let escapeRoutes = 0;
-            for (let dir of [
-              { x: -gridSize, y: 0 },
-              { x: gridSize, y: 0 },
-              { x: 0, y: -gridSize },
-              { x: 0, y: gridSize },
-            ]) {
-              const nx = x + dir.x;
-              const ny = y + dir.y;
-              if (astar.isValidPosition(nx, ny)) escapeRoutes++;
-            }
-
-            const score = dist + escapeRoutes * 50 + boundaryPenalty;
-            if (score > bestScore) {
-              bestScore = score;
-              bestTarget = { x, y };
+            if (dist > maxDist && isValidPlayerPosition(x, y)) {
+              maxDist = dist;
+              farthest = { x, y };
             }
           }
         }
 
-        // If no position is farther, pick the one with most escape routes and away from boundaries
-        if (!bestTarget) {
-          for (let x = 20; x < 780; x += gridSize) {
-            for (let y = 20; y < 580; y += gridSize) {
-              if (!astar.isValidPosition(x, y)) continue;
+        // Use EvaderAStar to get all possible paths to the farthest point
+        const astar = new EvaderAStar(obstacles, chaser);
+        const path = astar.findPath(evader, farthest);
 
-              // Avoid boundaries
-              const boundaryPenalty =
-                x < 40 || x > 760 || y < 40 || y > 560 ? -100 : 0;
-
-              // Count escape routes
-              let escapeRoutes = 0;
-              for (let dir of [
-                { x: -gridSize, y: 0 },
-                { x: gridSize, y: 0 },
-                { x: 0, y: -gridSize },
-                { x: 0, y: gridSize },
-              ]) {
-                const nx = x + dir.x;
-                const ny = y + dir.y;
-                if (astar.isValidPosition(nx, ny)) escapeRoutes++;
-              }
-
-              const score = escapeRoutes * 50 + boundaryPenalty;
-              if (score > bestScore) {
-                bestScore = score;
-                bestTarget = { x, y };
-              }
-            }
+        // Filter path: skip any step that brings evader closer to chaser
+        let safePath = [];
+        let prev = { x: evader.x, y: evader.y };
+        for (let step of path) {
+          const prevDist = Math.sqrt(
+            (prev.x - chaser.x) ** 2 + (prev.y - chaser.y) ** 2
+          );
+          const stepDist = Math.sqrt(
+            (step.x - chaser.x) ** 2 + (step.y - chaser.y) ** 2
+          );
+          // Only add step if it increases or maintains distance from chaser
+          if (stepDist >= prevDist) {
+            safePath.push(step);
+            prev = step;
           }
         }
 
-        // Move toward best target using A*
-        if (bestTarget) {
-          const path = astar.findPath(evader, bestTarget);
-          if (path.length > 0) {
-            const nextPos = path[0];
-            const dx = nextPos.x - evader.x;
-            const dy = nextPos.y - evader.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            if (distance > 0) {
-              evader.x += (dx / distance) * evader.speed;
-              evader.y += (dy / distance) * evader.speed;
-              return;
-            }
+        const evaderSpeed = 4;
+        // Move along the safe path if possible
+        if (safePath.length > 0) {
+          const nextPos = safePath[0];
+          const dx = nextPos.x - evader.x;
+          const dy = nextPos.y - evader.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          if (distance > 0) {
+            evader.x += (dx / distance) * evaderSpeed;
+            evader.y += (dy / distance) * evaderSpeed;
+            return;
           }
         }
 
-        // Fallback: stay still if no escape is possible
+        // Fallback: try any neighbor that increases distance from chaser
+        const neighbors = astar.getNeighbors(evader);
+        let bestNeighbor = null;
+        let bestDist = Math.sqrt(
+          (evader.x - chaser.x) ** 2 + (evader.y - chaser.y) ** 2
+        );
+        for (let n of neighbors) {
+          const dist = Math.sqrt((n.x - chaser.x) ** 2 + (n.y - chaser.y) ** 2);
+          if (dist > bestDist && isValidPlayerPosition(n.x, n.y)) {
+            bestDist = dist;
+            bestNeighbor = n;
+          }
+        }
+        if (bestNeighbor) {
+          evader.x = bestNeighbor.x;
+          evader.y = bestNeighbor.y;
+        }
       }
 
       function isValidPlayerPosition(x, y) {
@@ -448,14 +551,11 @@
       function gameLoop() {
         if (!gameRunning) return;
 
-        // Move players
-        if (currentChaser === "A") {
-          moveChaser(playerA, playerB);
-          moveEvader(playerB, playerA);
-        } else {
-          moveChaser(playerB, playerA);
-          moveEvader(playerA, playerB);
-        }
+        // Move players using chaser/evader logic
+        const chaser = getChaser();
+        const evader = getEvader();
+        moveChaser(chaser, evader);
+        moveEvader(evader, chaser);
 
         // Check for tag
         if (checkCollision(playerA, playerB)) {
@@ -611,8 +711,6 @@
         playerA.y = 50;
         playerB.x = 750;
         playerB.y = 550;
-        playerA.speed = 2;
-        playerB.speed = 2;
 
         setTimeout(() => {
           if (redScore < 5 && greenScore < 5) {
