@@ -311,7 +311,7 @@
             CANVAS_WIDTH: 1000,
             CANVAS_HEIGHT: 700,
             GRID_SIZE: 25,
-            ROUND_TIME: 30,
+            ROUND_TIME: 20,
             CHASER_SPEED: 2.5,
             EVADER_SPEED: 3.8,
             PLAYER_SIZE: 16,
@@ -336,6 +336,8 @@
             roundTimer: null,
             transitioning: false,
             transitionCounter: 3,
+            gameOver: false,
+            winner: null,
             playerRed: { x: 100, y: 350, size: CONFIG.PLAYER_SIZE, speedBoost: 1, boostTimer: 0 },
             playerGreen: { x: 900, y: 350, size: CONFIG.PLAYER_SIZE, speedBoost: 1, boostTimer: 0 },
             obstacles: [],
@@ -651,8 +653,13 @@
 
                 const openSet = [startNode];
                 const closedSet = new Set();
+                
+                let iterations = 0;
+                const MAX_ITERATIONS = 1000; // CRITICAL: Prevent infinite loops
 
-                while (openSet.length > 0) {
+                while (openSet.length > 0 && iterations < MAX_ITERATIONS) {
+                    iterations++;
+                    
                     openSet.sort((a, b) => a.f - b.f);
                     const current = openSet.shift();
 
@@ -855,6 +862,20 @@
                     }
                 }
 
+                // FIX: If no move with 4+ routes found, pick ANY neighbor farthest from chaser
+                if (!bestMove && neighbors.length > 0) {
+                    bestMove = neighbors[0];
+                    let maxDist = this.distance(bestMove, chaser);
+                    
+                    for (let i = 1; i < neighbors.length; i++) {
+                        const dist = this.distance(neighbors[i], chaser);
+                        if (dist > maxDist) {
+                            maxDist = dist;
+                            bestMove = neighbors[i];
+                        }
+                    }
+                }
+
                 return bestMove;
             }
 
@@ -939,8 +960,51 @@
                 pursuing = 'powerup';
             }
 
-            const path = chaserAI.findPath(chaser, target);
+            let path = chaserAI.findPath(chaser, target);
             
+            // FIX: If path to powerup fails, fallback to chasing evader
+            if (path.length === 0 && pursuing === 'powerup') {
+                target = evader;
+                pursuing = 'evader';
+                path = chaserAI.findPath(chaser, target);
+            }
+            
+            // ULTIMATE FALLBACK: If pathfinding completely fails, move directly toward target
+            if (path.length === 0) {
+                const dx = target.x - chaser.x;
+                const dy = target.y - chaser.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (dist > 1) {
+                    const speed = CONFIG.CHASER_SPEED * chaser.speedBoost;
+                    const moveX = (dx / dist) * speed;
+                    const moveY = (dy / dist) * speed;
+                    
+                    // Check if this move is valid (not into obstacle)
+                    const newX = chaser.x + moveX;
+                    const newY = chaser.y + moveY;
+                    
+                    if (chaserAI.isValidPosition(newX, newY, 10)) {
+                        chaser.x = newX;
+                        chaser.y = newY;
+                    } else {
+                        // Try moving only in X direction
+                        if (chaserAI.isValidPosition(chaser.x + moveX, chaser.y, 10)) {
+                            chaser.x += moveX;
+                        } 
+                        // Try moving only in Y direction
+                        else if (chaserAI.isValidPosition(chaser.x, chaser.y + moveY, 10)) {
+                            chaser.y += moveY;
+                        }
+                    }
+                }
+                
+                document.getElementById('chaserStats').textContent = 
+                    `Direct pursuit (no path). Distance: ${Math.round(dist)}px.`;
+                return;
+            }
+            
+            // Normal pathfinding movement
             if (path.length > 0) {
                 const nextStep = path[0];
                 const dx = nextStep.x - chaser.x;
@@ -983,6 +1047,59 @@
                 bestMove = evaderAI.decideBestMove(evader, chaser);
             }
             
+            // ULTIMATE FALLBACK: If AI returns nothing, move directly AWAY from chaser
+            if (!bestMove) {
+                const dx = evader.x - chaser.x;
+                const dy = evader.y - chaser.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (dist > 0) {
+                    const speed = CONFIG.EVADER_SPEED * evader.speedBoost;
+                    const moveX = (dx / dist) * speed;
+                    const moveY = (dy / dist) * speed;
+                    
+                    // Check if this move is valid
+                    const newX = evader.x + moveX;
+                    const newY = evader.y + moveY;
+                    
+                    if (evaderAI.pathfinder.isValidPosition(newX, newY, 10)) {
+                        evader.x = newX;
+                        evader.y = newY;
+                    } else {
+                        // Try moving only in X direction
+                        if (evaderAI.pathfinder.isValidPosition(evader.x + moveX, evader.y, 10)) {
+                            evader.x += moveX;
+                        } 
+                        // Try moving only in Y direction
+                        else if (evaderAI.pathfinder.isValidPosition(evader.x, evader.y + moveY, 10)) {
+                            evader.y += moveY;
+                        }
+                        // If completely stuck, try ANY direction
+                        else {
+                            const directions = [
+                                {x: speed, y: 0}, {x: -speed, y: 0},
+                                {x: 0, y: speed}, {x: 0, y: -speed},
+                                {x: speed*0.7, y: speed*0.7}, {x: -speed*0.7, y: speed*0.7},
+                                {x: speed*0.7, y: -speed*0.7}, {x: -speed*0.7, y: -speed*0.7}
+                            ];
+                            for (let dir of directions) {
+                                if (evaderAI.pathfinder.isValidPosition(evader.x + dir.x, evader.y + dir.y, 10)) {
+                                    evader.x += dir.x;
+                                    evader.y += dir.y;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                const distToChaser = Math.sqrt((evader.x - chaser.x)**2 + (evader.y - chaser.y)**2);
+                document.getElementById('evaderStats').textContent = 
+                    `Mode: Direct escape (no path). Distance: ${Math.round(distToChaser)}px.`;
+                return;
+            }
+            
+            // Normal AI movement
             if (bestMove) {
                 const dx = bestMove.x - evader.x;
                 const dy = bestMove.y - evader.y;
@@ -1120,6 +1237,105 @@
                 ctx.font = 'bold 64px Arial';
                 ctx.fillStyle = '#ffd93d';
                 ctx.fillText(`${gameState.transitionCounter}`, CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 + 100);
+            }
+
+            // Game Over Screen
+            if (gameState.gameOver) {
+                // Dark overlay with gradient
+                const gradient = ctx.createRadialGradient(
+                    CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2, 0,
+                    CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2, CONFIG.CANVAS_WIDTH / 2
+                );
+                gradient.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
+                gradient.addColorStop(1, 'rgba(0, 0, 0, 0.95)');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+
+                // Trophy/Winner icon (simple star shape)
+                ctx.save();
+                ctx.translate(CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 - 150);
+                ctx.fillStyle = '#ffd93d';
+                ctx.shadowColor = 'rgba(255, 217, 61, 0.8)';
+                ctx.shadowBlur = 30;
+                
+                // Draw star
+                ctx.beginPath();
+                for (let i = 0; i < 5; i++) {
+                    const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+                    const x1 = Math.cos(angle) * 40;
+                    const y1 = Math.sin(angle) * 40;
+                    if (i === 0) ctx.moveTo(x1, y1);
+                    else ctx.lineTo(x1, y1);
+                    const angle2 = angle + (2 * Math.PI) / 5;
+                    const x2 = Math.cos(angle2) * 16;
+                    const y2 = Math.sin(angle2) * 16;
+                    ctx.lineTo(x2, y2);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+
+                ctx.shadowBlur = 0;
+
+                // "GAME OVER" text
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 72px Arial';
+                ctx.textAlign = 'center';
+                ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+                ctx.shadowBlur = 20;
+                ctx.fillText('GAME OVER', CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 - 50);
+                ctx.shadowBlur = 0;
+
+                // Winner announcement
+                const winnerColor = gameState.winner === 'RED' ? '#ff6b6b' : '#51cf66';
+                ctx.fillStyle = winnerColor;
+                ctx.font = 'bold 56px Arial';
+                ctx.shadowColor = winnerColor;
+                ctx.shadowBlur = 25;
+                ctx.fillText(`${gameState.winner} AI WINS!`, CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 + 30);
+                ctx.shadowBlur = 0;
+
+                // Final score display
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 32px Arial';
+                ctx.fillText('FINAL SCORE', CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 + 90);
+
+                // Score boxes
+                const boxY = CONFIG.CANVAS_HEIGHT / 2 + 130;
+                const boxWidth = 180;
+                const boxHeight = 80;
+                const spacing = 40;
+
+                // Red score box
+                ctx.fillStyle = 'rgba(255, 107, 107, 0.3)';
+                ctx.fillRect(CONFIG.CANVAS_WIDTH / 2 - boxWidth - spacing / 2, boxY, boxWidth, boxHeight);
+                ctx.strokeStyle = '#ff6b6b';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(CONFIG.CANVAS_WIDTH / 2 - boxWidth - spacing / 2, boxY, boxWidth, boxHeight);
+                
+                ctx.fillStyle = '#ff6b6b';
+                ctx.font = 'bold 24px Arial';
+                ctx.fillText('RED AI', CONFIG.CANVAS_WIDTH / 2 - boxWidth / 2 - spacing / 2, boxY + 30);
+                ctx.font = 'bold 36px Arial';
+                ctx.fillText(gameState.redScore, CONFIG.CANVAS_WIDTH / 2 - boxWidth / 2 - spacing / 2, boxY + 65);
+
+                // Green score box
+                ctx.fillStyle = 'rgba(81, 207, 102, 0.3)';
+                ctx.fillRect(CONFIG.CANVAS_WIDTH / 2 + spacing / 2, boxY, boxWidth, boxHeight);
+                ctx.strokeStyle = '#51cf66';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(CONFIG.CANVAS_WIDTH / 2 + spacing / 2, boxY, boxWidth, boxHeight);
+                
+                ctx.fillStyle = '#51cf66';
+                ctx.font = 'bold 24px Arial';
+                ctx.fillText('GREEN AI', CONFIG.CANVAS_WIDTH / 2 + boxWidth / 2 + spacing / 2, boxY + 30);
+                ctx.font = 'bold 36px Arial';
+                ctx.fillText(gameState.greenScore, CONFIG.CANVAS_WIDTH / 2 + boxWidth / 2 + spacing / 2, boxY + 65);
+
+                // Play again message
+                ctx.fillStyle = '#aaa';
+                ctx.font = '24px Arial';
+                ctx.fillText('Click RESET to play again', CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 + 260);
             }
         }
 
@@ -1361,8 +1577,11 @@
                 }, 1000);
             } else {
                 const winner = gameState.redScore >= CONFIG.WIN_SCORE ? 'RED' : 'GREEN';
-                updateStatus(` GAME OVER! ${winner} AI WINS! Final Score - Red: ${gameState.redScore}, Green: ${gameState.greenScore}`);
+                gameState.gameOver = true;
+                gameState.winner = winner;
                 document.getElementById('pauseBtn').disabled = true;
+                document.getElementById('startBtn').disabled = true;
+                render(); // Show game over screen
             }
         }
 
@@ -1380,7 +1599,9 @@
         function resetGame() {
             gameState.running = false;
             gameState.paused = false;
-            gameState.transitioning = false; 
+            gameState.transitioning = false;
+            gameState.gameOver = false;
+            gameState.winner = null;
             gameState.time = CONFIG.ROUND_TIME;
             gameState.redScore = 0;
             gameState.greenScore = 0;
